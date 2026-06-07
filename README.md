@@ -6,25 +6,6 @@
 
 ---
 
-## Sommaire
-
-1. [Vue d'ensemble](#1-vue-densemble)
-2. [Étape 1 — Environnement et prérequis](#2-étape-1--environnement-et-prérequis)
-3. [Étape 2 — frida-server sur Genymotion](#3-étape-2--frida-server-sur-genymotion)
-4. [Étape 3 — Test d'injection avec hello.js](#4-étape-3--test-dinjection-avec-hellojs)
-5. [Étape 4 — bypass_root_basic.js (couche Java)](#5-étape-4--bypass_root_basicjs-couche-java)
-6. [Étape 4.1 — bypass_native.js (couche C/JNI)](#6-étape-41--bypass_nativejs-couche-cjni)
-7. [Étape 5 — Objection](#7-étape-5--objection)
-8. [Étape 6 — Medusa](#8-étape-6--medusa)
-9. [Étape 7 — Magisk (hors scope)](#9-étape-7--magisk-hors-scope)
-10. [Résultats et check-list](#10-résultats-et-check-list)
-11. [Concepts clés](#11-concepts-clés)
-12. [Comparatif des approches](#12-comparatif-des-approches)
-13. [Récapitulatif des commandes](#13-récapitulatif-des-commandes)
-14. [Dépannage](#14-dépannage)
-
----
-
 ## 1. Vue d'ensemble
 
 ### Contexte
@@ -67,7 +48,7 @@ adb devices
 # → 192.168.206.103:5555   device
 ```
 
-### 2.2 Installation Frida (si nécessaire)
+### 2.2 Installation Frida 
 
 ```powershell
 pip install --upgrade frida frida-tools
@@ -199,68 +180,15 @@ frida -U -f com.scottyab.rootbeer.sample -l bypass_root_basic.js
 
 Intercepter les appels POSIX bas niveau (`open`, `openat`, `access`, `stat`, `lstat`) que l'app effectue directement en C pour chercher les binaires root.
 
-### 6.2 Script bypass_native.js
-
-```javascript
-const SUS = [
-  '/system/bin/su','/system/xbin/su','/sbin/su','/system/su',
-  '/system/bin/busybox','/system/xbin/busybox'
-];
-
-function isSus(ptrPath) {
-  try {
-    const p = ptrPath.readCString();
-    return !!p && (SUS.indexOf(p) !== -1 ||
-           p.includes('/proc/mounts') ||
-           p.includes('/proc/self/mounts'));
-  } catch(_) { return false; }
-}
-
-function hookLibc(name, pathArgIndex) {
-  const libc = 'libc.so';
-  const addr = Module.findExportByName(libc, name) ||
-               Module.findExportByName(null, name);
-  if (!addr) return console.log('[*] Export introuvable:', name);
-  Interceptor.attach(addr, {
-    onEnter(args) {
-      const pArg = pathArgIndex >= 0 ? args[pathArgIndex] : null;
-      if (pArg && isSus(pArg)) {
-        this.block = true;
-        this.path = pArg.readCString();
-      }
-    },
-    onLeave(retval) {
-      if (this.block) {
-        console.log('[+] Blocked', name, 'on', this.path);
-        retval.replace(ptr(-1));
-      }
-    }
-  });
-  console.log('[+] Hooked', name);
-}
-
-hookLibc('open', 0);
-hookLibc('openat', 1);
-hookLibc('access', 0);
-hookLibc('stat', 0);
-hookLibc('lstat', 0);
-```
-
-### 6.3 Exécution combinée (théorique)
+### 6.2 Exécution combinée (théorique)
 
 ```powershell
 frida -U -f com.scottyab.rootbeer.sample -l bypass_root_basic.js -l bypass_native.js
 ```
 
-### 6.4 Problème rencontré — Interceptor cassé sur x86/Frida 17
+### 6.3 Problème rencontré — Interceptor cassé sur x86/Frida 17
+<img width="460" height="118" alt="image" src="https://github.com/user-attachments/assets/f901c115-ea37-4d77-9621-b31b5d32b247" />
 
-```
-[-] hookLibc failed for open : not a function
-[-] hookLibc failed for openat : not a function
-[-] hookLibc failed for access : not a function
-[-] hookLibc failed for stat : not a function
-[-] hookLibc failed for lstat : not a function
-```
 
 **Diagnostic depuis la console interactive :**
 
@@ -275,10 +203,7 @@ frida -U -f com.scottyab.rootbeer.sample -l bypass_root_basic.js -l bypass_nativ
 // → TypeError: not a function
 ```
 
-> 📸 **[SCREEN 7 — Insérer ici]**  
-> *Capture du terminal montrant les erreurs `hookLibc failed` et le diagnostic `Interceptor` / `Module.findExportByName` dans la console interactive*
-
-### 6.5 Cause racine
+### 6.4 Cause racine
 
 **Bug connu : Frida 17.x + Genymotion x86 + mode attach**
 
@@ -291,7 +216,7 @@ Le runtime natif Frida (`frida-agent`) ne s'initialise pas complètement sur les
 | Frida 16.x + Genymotion x86 | ✅ fonctionnel |
 | Frida 17.x + vrai device arm64 | ✅ fonctionnel |
 
-### 6.6 Solution — Script fusionné bypass_combined.js
+### 6.5 Solution — Script fusionné bypass_combined.js
 
 Pour contourner le conflit entre `-l script1 -l script2`, on fusionne les deux scripts et on étend les hooks RootBeer Java pour couvrir les méthodes manquantes :
 
@@ -418,13 +343,9 @@ frida -U -f com.scottyab.rootbeer.sample -l bypass_combined.js
 | Magisk specific checks | ✅ | ✅ |
 | **Score** | **8/12** | **10/12** |
 
-> 📸 **[SCREEN 8 — Insérer ici]**  
-> *Capture du terminal montrant les logs de bypass_combined.js avec tous les `[+] RootBeer.xxx -> false`*
+<img width="516" height="876" alt="Screenshot 2026-06-07 140859" src="https://github.com/user-attachments/assets/704d9a68-22b5-4270-9f9b-6cee4b62ce71" />
 
-> 📸 **[SCREEN 9 — Insérer ici]**  
-> *Capture de l'app RootBeer après bypass_combined.js — encore ROOTED mais avec 10 checks en vert*
-
-### 6.8 Pourquoi 2 checks résistent encore ?
+### 6.9 Pourquoi 2 checks résistent encore ?
 
 Ces 2 checks sont **100% natifs** — ils lisent directement via des appels système C, sans aucune passerelle Java :
 
@@ -437,8 +358,8 @@ Sur Genymotion x86 + Frida 17, `Interceptor` n'est pas fonctionnel → ces check
 
 ## 7. Étape 5 — Objection
 
-> ℹ️ **Déjà couvert en Lab 4** — `android root disable` → 12/12 NOT ROOTED  
-> Se référer au rapport Lab 4 pour les détails.
+> ℹ️ **Déjà couvert en Lab 13** — `android root disable` → 12/12 NOT ROOTED  
+> Se référer au rapport Lab 14 pour les détails.
 
 ```powershell
 objection -n com.scottyab.rootbeer.sample start
@@ -450,8 +371,8 @@ android root disable
 
 ## 8. Étape 6 — Medusa
 
-> ℹ️ **Déjà couvert en Lab 3** — module `rootbeer_detection_bypass_no_obfuscation` → 12/12 NOT ROOTED  
-> Se référer au rapport Lab 3 pour les détails.
+> ℹ️ **Déjà couvert en Lab 12** — module `rootbeer_detection_bypass_no_obfuscation` → 12/12 NOT ROOTED  
+> Se référer au rapport Lab 12 pour les détails.
 
 ```powershell
 python medusa.py -p com.scottyab.rootbeer.sample
@@ -462,7 +383,7 @@ run com.scottyab.rootbeer.sample
 
 ---
 
-## 9. Étape 7 — Magisk (hors scope)
+## 9. Étape 7 — Magisk
 
 ### Quand utiliser Magisk plutôt que Frida/Objection/Medusa ?
 
@@ -484,43 +405,11 @@ run com.scottyab.rootbeer.sample
 5. Nettoyer données Play Store/Services
 6. Redémarrer et tester
 ```
-
-> ⚠️ **Hors scope** : Genymotion ne supporte pas Magisk. `Strong Integrity` (matériel) n'est généralement pas contournable sans vulnérabilité spécifique.
-
 ---
 
-## 10. Résultats et check-list
+## 10. Concepts clés
 
-### 10.1 Check-list rapide
-
-| Étape | Statut | Détail |
-|---|---|---|
-| ✅ Python et pip OK | Validé | Python 3.14.5 |
-| ✅ ADB OK | Validé | `adb devices` → `device` |
-| ✅ frida-server lancé | Validé | `frida-ps -Uai` liste les apps |
-| ✅ hello.js injecté | Validé | `Java.perform OK` |
-| ✅ bypass_root_basic.js | Validé | 8/12 checks Java bypassés |
-| ⚠️ bypass_native.js | Limité | `Interceptor` cassé sur x86/Frida 17 |
-| ✅ bypass_combined.js | Validé | 10/12 checks bypassés |
-| ✅ Objection | Validé | 12/12 — Lab 4 |
-| ✅ Medusa | Validé | 12/12 — Lab 3 |
-| ➖ Magisk | Hors scope | Incompatible Genymotion |
-
-### 10.2 Progression des scores
-
-| Script / Outil | Score | Couverture |
-|---|---|---|
-| bypass_root_basic.js | 8/12 | Java uniquement |
-| bypass_combined.js | 10/12 | Java étendu + SystemProperties |
-| bypass_native.js | +0 (x86 limité) | Natif — non fonctionnel sur cette config |
-| Objection (Lab 4) | 12/12 | Java + natif via modules intégrés |
-| Medusa (Lab 3) | 12/12 | Java via réflexion |
-
----
-
-## 11. Concepts clés
-
-### 11.1 Java.perform()
+### 10.1 Java.perform()
 
 `Java.perform()` est le point d'entrée obligatoire pour tout hook Java dans Frida. Il garantit que le runtime ART est prêt avant d'exécuter le code.
 
@@ -531,7 +420,7 @@ Java.perform(function () {
 });
 ```
 
-### 11.2 .implementation vs Object.defineProperty
+### 10.2 .implementation vs Object.defineProperty
 
 Deux façons de hooker selon le type de cible :
 
@@ -547,7 +436,7 @@ Object.defineProperty(Build, 'TAGS', {
 });
 ```
 
-### 11.3 Overloads Java
+### 10.3 Overloads Java
 
 Quand une méthode a plusieurs signatures, il faut spécifier la surcharge :
 
@@ -563,7 +452,7 @@ Runtime.exec.overload('[Ljava.lang.String;').implementation = function(arr) {
 };
 ```
 
-### 11.4 Interceptor.attach — Hooks natifs
+### 10.4 Interceptor.attach — Hooks natifs
 
 Pour intercepter des fonctions C/POSIX :
 
@@ -581,7 +470,7 @@ Interceptor.attach(addr, {
 
 `ptr(-1)` simule un code d'erreur POSIX standard — l'app croit que le fichier n'existe pas.
 
-### 11.5 Spawn vs Attach
+### 10.5 Spawn vs Attach
 
 ```
 Spawn  (-f) : Frida démarre l'app → hooks actifs dès le début
@@ -590,7 +479,7 @@ Attach (-p) : App déjà lancée → Frida s'y greffe
 
 Sur Genymotion x86 + Frida 17, les hooks **Java** fonctionnent dans les deux modes. Les hooks **natifs** (`Interceptor`) échouent dans les deux modes — c'est une limitation de l'environnement x86.
 
-### 11.6 Obfuscation — Énumération des classes chargées
+### 10.6 Obfuscation — Énumération des classes chargées
 
 Quand les noms de classes sont inconnus (app obfusquée) :
 
@@ -605,7 +494,7 @@ Java.perform(function(){
 });
 ```
 
-### 11.7 Anti-Frida basique
+### 10.7 Anti-Frida basique
 
 Certaines apps détectent la présence de Frida. Mitigation minimale :
 
@@ -625,124 +514,4 @@ Java.perform(function(){
 
 ---
 
-## 12. Comparatif des approches
 
-| Critère | bypass_root_basic.js | bypass_combined.js | Objection | Medusa |
-|---|---|---|---|---|
-| Écriture de code | Fourni clé en main | Fourni + adapté | ❌ aucune | ❌ aucune |
-| Couverture Java | Partielle | Complète | Complète | Complète |
-| Couverture native | ❌ | ❌ (x86) | ✅ intégré | ❌ |
-| Score RootBeer | 8/12 | 10/12 | 12/12 | 12/12 |
-| Logs détaillés | ✅ `[+]` par hook | ✅ `[+]` par hook | Partiels | Partiels |
-| Valeur pédagogique | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐ |
-
----
-
-## 13. Récapitulatif des commandes
-
-### Setup
-
-```powershell
-# Vérifications
-python --version && frida --version && adb devices
-
-# frida-server
-adb shell setenforce 0
-adb shell "/data/local/tmp/frida-server -l 0.0.0.0 &"
-adb forward tcp:27042 tcp:27042
-
-# Lister les apps
-frida-ps -Uai
-frida-ps -U | findstr -i rootbeer
-```
-
-### Frida — Spawn (recommandé)
-
-```powershell
-# Test minimal
-frida -U -f com.scottyab.rootbeer.sample -l hello.js
-
-# Bypass Java basique
-frida -U -f com.scottyab.rootbeer.sample -l bypass_root_basic.js
-
-# Bypass Java étendu
-frida -U -f com.scottyab.rootbeer.sample -l bypass_combined.js
-```
-
-### Frida — Attach (sur app déjà lancée)
-
-```powershell
-# Trouver le PID
-frida-ps -U | findstr -i rootbeer
-
-# Attacher par PID
-frida -U -p <PID> -l bypass_combined.js
-
-# Attacher par nom
-frida -U -n "RootBeer Sample" -l bypass_combined.js
-```
-
-### frida-trace — Découverte des appels natifs
-
-```powershell
-frida-trace -U -p <PID> -i "open" -i "access" -i "stat" -i "openat" -i "fopen"
-frida-trace -U -p <PID> -j "*isRoot*"
-```
-
-### Console interactive Frida
-
-```javascript
-// Diagnostiquer Interceptor
-typeof Interceptor
-Module.findExportByName('libc.so', 'open')
-
-// Énumérer les classes chargées
-Java.perform(function(){
-  Java.enumerateLoadedClasses({
-    onMatch: function(n){ if(n.includes('root')) console.log(n); },
-    onComplete: function(){}
-  });
-});
-```
-
----
-
-## 14. Dépannage
-
-| Problème | Cause | Solution |
-|---|---|---|
-| `--no-pause` non reconnu | Supprimé dans Frida 17.x | Ne pas l'utiliser |
-| `Interceptor: not a function` | Bug Frida 17 + Genymotion x86 | Utiliser Java hooks uniquement ou downgrader Frida |
-| `Module.findExportByName: not a function` | Même cause | Idem |
-| Deux `-l` scripts en conflit | Contexte partagé Frida 17 | Fusionner en un seul fichier |
-| `frida-ps` ne liste pas l'app | frida-server arrêté | `adb shell ps \| findstr frida` puis relancer |
-| App crashe au spawn | Hooks trop tôt | Essayer en attach (`-p PID`) |
-| Classes RootBeer non trouvées | App non encore chargée | Déclencher CHECK dans l'app d'abord |
-
----
-
-## Bilan des 5 labs
-
-| Lab | Outil | Objectif | Score |
-|---|---|---|---|
-| Lab 1 | Frida | Install, déploiement frida-server, injection minimale | — |
-| Lab 2 | Frida | Scripts JS custom écrits from scratch | 9/12 |
-| Lab 3 | Medusa | Module `.med` prêt à l'emploi | 12/12 ✅ |
-| Lab 4 | Objection | CLI interactive — `android root disable` | 12/12 ✅ |
-| **Lab 5** | **Frida** | **Scripts fournis clé en main, progression pédagogique** | **10/12** |
-
-Ces cinq labs couvrent l'ensemble des approches d'instrumentation dynamique Android disponibles. La progression logique va du contrôle maximal (Frida pur) à la simplicité maximale (Objection), en passant par la modularité (Medusa).
-
----
-
-## Références
-
-- Frida : <https://frida.re/>
-- RootBeer : <https://github.com/scottyab/rootbeer>
-- Objection : <https://github.com/sensepost/objection>
-- Android Platform Tools (ADB) : <https://developer.android.com/tools/releases/platform-tools>
-- Frida Releases : <https://github.com/frida/frida/releases>
-
----
-
-*Guide rédigé le 05 juin 2026 — Lab 5 Frida Scripts — Instrumentation Dynamique Android*
