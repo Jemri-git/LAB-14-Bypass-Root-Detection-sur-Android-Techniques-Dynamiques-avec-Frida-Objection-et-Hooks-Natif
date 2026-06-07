@@ -153,124 +153,17 @@ Neutraliser les checks de root detection implémentés en Java/Kotlin, sans touc
 
 Avant toute instrumentation, RootBeer détecte correctement l'environnement rooté.
 
-### 5.3 Script bypass_root_basic.js
-
-```javascript
-// Hooks simples pour neutraliser des checks Java basiques
-const suspiciousPaths = [
-  "/system/bin/su", "/system/xbin/su", "/sbin/su", "/system/su",
-  "/system/app/Superuser.apk", "/system/app/SuperSU.apk",
-  "/system/bin/busybox", "/system/xbin/busybox"
-];
-
-function lc(s){ try { return (""+s).toLowerCase(); } catch(_) { return ""; } }
-
-Java.perform(function () {
-  // 1) Build.TAGS → retour propre
-  try {
-    const Build = Java.use('android.os.Build');
-    Object.defineProperty(Build, 'TAGS', { get: function() { return 'release-keys'; } });
-    console.log('[+] Build.TAGS -> release-keys');
-  } catch (e) { console.log('[-] Build.TAGS hook failed:', e); }
-
-  // 2) RootBeer (si présent)
-  try {
-    const RB = Java.use('com.scottyab.rootbeer.RootBeer');
-    RB.isRooted.implementation = function(){
-      console.log('[+] RootBeer.isRooted -> false'); return false;
-    };
-    if (RB.isRootedWithBusyBoxCheck)
-      RB.isRootedWithBusyBoxCheck.implementation = function(){
-        console.log('[+] RootBeer.isRootedWithBusyBoxCheck -> false'); return false;
-      };
-  } catch(e) { console.log('[*] RootBeer non présent'); }
-
-  // 3) File.exists() → dire "non" pour chemins suspects
-  try {
-    const File = Java.use('java.io.File');
-    File.exists.implementation = function () {
-      const p = this.getAbsolutePath();
-      if (suspiciousPaths.indexOf(p) !== -1) {
-        console.log('[+] File.exists bypass:', p); return false;
-      }
-      return this.exists.call(this);
-    };
-  } catch (e) { console.log('[-] File.exists hook failed:', e); }
-
-  // 4) Runtime.exec → bloquer su/which/busybox
-  try {
-    const Runtime = Java.use('java.lang.Runtime');
-    const JString = Java.use('java.lang.String');
-    const StringArray = Java.use('[Ljava.lang.String;');
-
-    function suspicious(cmd){
-      const s = lc(Array.isArray(cmd)? cmd.join(' ') : cmd);
-      return s.startsWith('su') || s.includes(' which su') ||
-             s.includes(' busybox') || s.includes(' su ');
-    }
-
-    Runtime.exec.overload('java.lang.String').implementation = function (cmd) {
-      if (suspicious(cmd)) {
-        console.log('[+] Blocked Runtime.exec:', cmd);
-        return this.exec(JString.$new('echo'));
-      }
-      return this.exec(cmd);
-    };
-    Runtime.exec.overload('[Ljava.lang.String;').implementation = function (arr) {
-      const js = arr? Array.from(arr) : [];
-      if (suspicious(js)) {
-        console.log('[+] Blocked Runtime.exec:', js.join(' '));
-        const repl = StringArray.$new(1); repl[0] = JString.$new('echo');
-        return this.exec(repl);
-      }
-      return this.exec(arr);
-    };
-    Runtime.exec.overload('java.lang.String','[Ljava.lang.String;').implementation = function (cmd, env) {
-      if (suspicious(cmd)) {
-        console.log('[+] Blocked Runtime.exec:', cmd);
-        return this.exec(JString.$new('echo'), env);
-      }
-      return this.exec(cmd, env);
-    };
-    Runtime.exec.overload('[Ljava.lang.String;','[Ljava.lang.String;').implementation = function (arr, env) {
-      const js = arr? Array.from(arr) : [];
-      if (suspicious(js)) {
-        console.log('[+] Blocked Runtime.exec:', js.join(' '));
-        const repl = StringArray.$new(1); repl[0] = JString.$new('echo');
-        return this.exec(repl, env);
-      }
-      return this.exec(arr, env);
-    };
-    console.log('[+] Runtime.exec hooks installés');
-  } catch (e) { console.log('[-] Runtime.exec hooks failed:', e); }
-
-  console.log('[+] Bypass Java installé');
-});
-```
-
-### 5.4 Exécution
+### 5.3 Exécution du script bypass_root_basic.js
 
 ```powershell
 frida -U -f com.scottyab.rootbeer.sample -l bypass_root_basic.js
 ```
 
-### 5.5 Logs obtenus
+### 5.4 Logs obtenus
 
-```
-[Phone::com.scottyab.rootbeer.sample ]-> [+] Build.TAGS -> release-keys
-[+] Runtime.exec hooks installés
-[+] Bypass Java installé
-[+] File.exists bypass: /system/bin/busybox
-[+] File.exists bypass: /system/xbin/busybox
-[+] File.exists bypass: /sbin/su
-[+] File.exists bypass: /system/bin/su
-[+] File.exists bypass: /system/xbin/su
-```
+<img width="822" height="446" alt="image" src="https://github.com/user-attachments/assets/7412dc2c-5cdd-463b-9524-196de0045ee8" />
 
-> 📸 **[SCREEN 5 — Insérer ici]**  
-> *Capture du terminal montrant les logs `[+]` de bypass_root_basic.js après CHECK dans l'app*
-
-### 5.6 Résultat — 8/12
+### 5.5 Résultat — 8/12
 
 | Check | Statut |
 |---|---|
@@ -288,11 +181,10 @@ frida -U -f com.scottyab.rootbeer.sample -l bypass_root_basic.js
 | Magisk specific checks | ✅ bypassé |
 
 **Score : 8/12** — attendu pour la couche Java seule.
+<img width="434" height="834" alt="Screenshot 2026-06-07 142748" src="https://github.com/user-attachments/assets/ceb40db3-2908-4be6-a306-1b0420ddd4f7" />
 
-> 📸 **[SCREEN 6 — Insérer ici]**  
-> *Capture de l'app RootBeer après bypass_root_basic.js — encore ROOTED mais avec 8 checks verts*
 
-### 5.7 Pourquoi 4 checks résistent ?
+### 5.6 Pourquoi 4 checks résistent ?
 
 - **TestKeys** — RootBeer vérifie `Build.TAGS` via une méthode supplémentaire non couverte par ce script basique
 - **2nd SU Binary check** — certains chemins absents de `suspiciousPaths`
